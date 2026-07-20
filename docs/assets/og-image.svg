@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2dd4bf"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- Decorative circles -->
+  <circle cx="1050" cy="80" r="220" fill="#2dd4bf" opacity="0.06"/>
+  <circle cx="1100" cy="500" r="280" fill="#0d9488" opacity="0.08"/>
+  <circle cx="80" cy="550" r="160" fill="#ffffff" opacity="0.04"/>
+
+  <!-- Accent bar -->
+  <rect x="0" y="0" width="10" height="630" fill="url(#accent)"/>
+
+  <!-- AI Icon Badge -->
+  <rect x="70" y="110" width="72" height="72" rx="16" fill="url(#accent)"/>
+  <text x="106" y="157" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="34" font-weight="800" fill="#ffffff" text-anchor="middle">AI</text>
+
+  <!-- Main Title & Subtitle -->
+  <text x="165" y="160" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="800" fill="#ffffff" letter-spacing="-0.01em">AI Resume Shortener</text>
+  <text x="70" y="245" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="28" font-weight="400" fill="rgba(255,255,255,0.88)" letter-spacing="0.01em">Recruitment Intelligence &amp; ATS Fit Scoring for Frappe HR</text>
+
+  <!-- Documentation Badge -->
+  <rect x="70" y="290" width="220" height="42" rx="21" fill="#2dd4bf" opacity="0.9"/>
+  <text x="180" y="317" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="700" fill="#0f766e" text-anchor="middle">v1.0 Documentation</text>
+
+  <!-- Feature Pills -->
+  <rect x="70" y="375" width="280" height="48" rx="24" fill="#ffffff" opacity="0.12"/>
+  <text x="210" y="405" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#ffffff" text-anchor="middle">Multi-Model AI Failover</text>
+
+  <rect x="370" y="375" width="280" height="48" rx="24" fill="#ffffff" opacity="0.12"/>
+  <text x="510" y="405" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#ffffff" text-anchor="middle">ATS Fit &amp; Star Ratings</text>
+
+  <rect x="670" y="375" width="310" height="48" rx="24" fill="#ffffff" opacity="0.12"/>
+  <text x="825" y="405" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#ffffff" text-anchor="middle">Candidate Audit History</text>
+
+  <!-- Footer -->
+  <text x="70" y="560" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="600" fill="rgba(255,255,255,0.6)">Invento Software Limited</text>
+</svg>

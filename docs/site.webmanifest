@@ -1,0 +1,22 @@
+{
+  "name": "AI Resume Shortener",
+  "short_name": "AI Resume Docs",
+  "description": "Documentation for AI Resume Shortener platform by Invento Software Limited",
+  "start_url": "/ai_resume_shortener/",
+  "display": "standalone",
+  "background_color": "#f8f9fa",
+  "theme_color": "#0d9488",
+  "icons": [
+    {
+      "src": "assets/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

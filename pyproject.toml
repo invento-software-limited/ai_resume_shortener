@@ -3,7 +3,7 @@ name = "ai_resume_shortener"
 authors = [
     { name = "Invento Software Limited", email = "developer@invento.com.bd"}
 ]
-description = " AI-powered tool to shorten and optimize resumes while preserving key skills, experience, and achievements."
+description = "Automate candidate resume screening, ATS scoring, and interview question generation for Frappe HR with multi-model AI failover and token cost tracking."
 requires-python = ">=3.14"
 readme = "README.md"
 dynamic = ["version"]
@@ -59,3 +59,6 @@ typing-modules = ["frappe.types.DF"]
 quote-style = "double"
 indent-style = "tab"
 docstring-code-format = true
+
+[tool.bench.frappe-dependencies]
+frappe = ">=16.0.0,<17.0.0"

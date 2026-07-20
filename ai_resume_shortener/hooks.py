@@ -1,14 +1,15 @@
 app_name = "ai_resume_shortener"
-app_title = "Ai Resume Shortener"
+app_title = "AI Resume Shortener"
 app_publisher = "Invento Software Limited"
-app_description = " AI-powered tool to shorten and optimize resumes while preserving key skills, experience, and achievements."
-app_email = "developer@invento.com.bd"
+app_description = "Automate candidate resume screening, ATS scoring, and interview question generation for Frappe HR with multi-model AI failover and token cost tracking."
+app_email = "hello@invento.com.bd"
 app_license = "mit"
+app_logo_url = "/assets/ai_resume_shortener/logo.png"
 
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["hrms"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [

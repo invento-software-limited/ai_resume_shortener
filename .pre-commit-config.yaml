@@ -62,6 +62,13 @@ repos:
                 ai_resume_shortener/templates/includes/.*|
                 ai_resume_shortener/public/js/lib/.*
             )$
+  - repo: local
+    hooks:
+      - id: semgrep
+        name: semgrep
+        entry: bash -c 'export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python && semgrep --config=https://github.com/frappe/semgrep-rules --config r/python.lang.correctness "$@"' --
+        language: system
+        types: [python]
 
 ci:
     autoupdate_schedule: weekly
