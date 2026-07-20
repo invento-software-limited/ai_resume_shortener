@@ -7,19 +7,26 @@
  "engine": "InnoDB",
  "field_order": [
   "default",
+  "prompt_template",
   "model_config_list"
  ],
  "fields": [
   {
-   "fieldname": "model_config_list",
-   "fieldtype": "Table",
-   "label": "Model Config List",
-   "options": "Ai Model Config List"
-  },
-  {
    "fieldname": "default",
    "fieldtype": "Link",
    "label": "Default",
+   "options": "Ai Model Config List"
+  },
+  {
+   "description": "Use placeholders {job_desc} and {resume_text}. Leave empty to use the standard default prompt.",
+   "fieldname": "prompt_template",
+   "fieldtype": "Small Text",
+   "label": "Prompt Template"
+  },
+  {
+   "fieldname": "model_config_list",
+   "fieldtype": "Table",
+   "label": "Model Config List",
    "options": "Ai Model Config List"
   }
  ],

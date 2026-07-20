@@ -8,7 +8,11 @@
  "engine": "InnoDB",
  "field_order": [
   "service_provider",
+  "model_name",
+  "company",
   "api_key",
+  "input_cost_per_1m",
+  "output_cost_per_1m",
   "enabled"
  ],
  "fields": [
@@ -20,11 +24,36 @@
    "options": "Ai Provider"
   },
   {
+   "fieldname": "model_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Model Name"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company"
+  },
+  {
    "fieldname": "api_key",
    "fieldtype": "Password",
    "in_list_view": 1,
    "label": "Api Key",
    "mandatory_depends_on": "eval: doc.service_provider"
+  },
+  {
+   "default": "0.0",
+   "fieldname": "input_cost_per_1m",
+   "fieldtype": "Float",
+   "label": "Input Cost / 1M Tokens ($)"
+  },
+  {
+   "default": "0.0",
+   "fieldname": "output_cost_per_1m",
+   "fieldtype": "Float",
+   "label": "Output Cost / 1M Tokens ($)"
   },
   {
    "default": "0",
