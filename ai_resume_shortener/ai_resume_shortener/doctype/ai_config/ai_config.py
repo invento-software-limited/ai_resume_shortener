@@ -6,7 +6,7 @@ import json
 import re
 import time
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import frappe
@@ -124,14 +124,14 @@ def get_default_provider_and_model() -> tuple[str, str]:
 
 
 @frappe.whitelist()
-def analyze_single_applicant(job_applicant_name: str) -> Dict[str, Any]:
+def analyze_single_applicant(job_applicant_name: str) -> dict[str, Any]:
 	if not job_applicant_name:
 		frappe.throw("Job Applicant name is required.")
 	return process_single_applicant_by_name(job_applicant_name)
 
 
 @frappe.whitelist()
-def enqueue_single_applicant_analysis(job_applicant_name: str) -> Dict[str, Any]:
+def enqueue_single_applicant_analysis(job_applicant_name: str) -> dict[str, Any]:
 	if not job_applicant_name:
 		frappe.throw("Job Applicant name is required.")
 
@@ -169,7 +169,7 @@ def enqueue_single_applicant_analysis(job_applicant_name: str) -> Dict[str, Any]
 
 
 @frappe.whitelist()
-def enqueue_bulk_applicant_analysis(job_applicant_names: Any) -> Dict[str, Any]:
+def enqueue_bulk_applicant_analysis(job_applicant_names: Any) -> dict[str, Any]:
 	if isinstance(job_applicant_names, str):
 		try:
 			job_applicant_names = json.loads(job_applicant_names)
@@ -209,7 +209,7 @@ def enqueue_bulk_applicant_analysis(job_applicant_names: Any) -> Dict[str, Any]:
 
 
 @frappe.whitelist()
-def get_ranked_candidates(job_title: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_ranked_candidates(job_title: str | None = None) -> list[dict[str, Any]]:
 	"""
 	Ranks candidates for a given position based on overall match percentage and overall score.
 	"""
@@ -240,7 +240,7 @@ def get_ranked_candidates(job_title: Optional[str] = None) -> List[Dict[str, Any
 
 
 @frappe.whitelist()
-def get_queue_metrics() -> Dict[str, Any]:
+def get_queue_metrics() -> dict[str, Any]:
 	"""
 	Queue Dashboard API returning Pending, Completed, and Failed applicant counts.
 	"""
@@ -258,7 +258,7 @@ def get_queue_metrics() -> Dict[str, Any]:
 
 
 @frappe.whitelist()
-def retry_failed_applicants() -> Dict[str, Any]:
+def retry_failed_applicants() -> dict[str, Any]:
 	"""
 	Enqueues all failed applicants for re-analysis.
 	"""
@@ -280,7 +280,7 @@ def retry_failed_applicants() -> Dict[str, Any]:
 
 
 @frappe.whitelist()
-def benchmark_resume(job_applicant_name: str) -> Dict[str, Any]:
+def benchmark_resume(job_applicant_name: str) -> dict[str, Any]:
 	"""
 	AI Benchmark Tool: Analyzes a resume across all enabled AI models and returns comparative metrics.
 	"""
@@ -323,7 +323,7 @@ def benchmark_resume(job_applicant_name: str) -> Dict[str, Any]:
 	return {"job_applicant": job_applicant_name, "benchmark": benchmark_results}
 
 
-def process_single_applicant_by_name(job_applicant_name: str) -> Dict[str, Any]:
+def process_single_applicant_by_name(job_applicant_name: str) -> dict[str, Any]:
 	job_applicant = frappe.get_doc("Job Applicant", job_applicant_name)
 	return process_single_applicant(job_applicant)
 
@@ -358,7 +358,9 @@ def get_configured_prompt(job_desc: str, resume_text: str) -> tuple[str, str]:
 	return formatted, version_name
 
 
-def calculate_request_cost(ai_response: Dict[str, Any], input_cost_per_1m: float, output_cost_per_1m: float) -> float:
+def calculate_request_cost(
+	ai_response: dict[str, Any], input_cost_per_1m: float, output_cost_per_1m: float
+) -> float:
 	prompt_tokens = ai_response.get("prompt_tokens", 0)
 	completion_tokens = ai_response.get("completion_tokens", 0)
 
@@ -368,7 +370,9 @@ def calculate_request_cost(ai_response: Dict[str, Any], input_cost_per_1m: float
 	return round(input_cost + output_cost, 6)
 
 
-def get_resume_analysis_ai_response(job_applicant: Any, resume_text: str, ai_model_config: Any) -> Dict[str, Any]:
+def get_resume_analysis_ai_response(
+	job_applicant: Any, resume_text: str, ai_model_config: Any
+) -> dict[str, Any]:
 	job_desc = frappe.db.get_value("Job Opening", job_applicant.get("job_title"), "description") or ""
 	prompt, prompt_version = get_configured_prompt(job_desc, resume_text)
 
@@ -409,7 +413,7 @@ def get_resume_analysis_ai_response(job_applicant: Any, resume_text: str, ai_mod
 	return res
 
 
-def openrouter_resume_analysis(prompt: str, ai_model_config: Any) -> Dict[str, Any]:
+def openrouter_resume_analysis(prompt: str, ai_model_config: Any) -> dict[str, Any]:
 	url = "https://openrouter.ai/api/v1/chat/completions"
 	api_key = ai_model_config.get_password("api_key")
 	model_name = ai_model_config.get("model_name") or "openrouter/free"
@@ -477,12 +481,11 @@ def openrouter_resume_analysis(prompt: str, ai_model_config: Any) -> Dict[str, A
 		}
 
 
-def google_gemini_resume_analysis(prompt: str, ai_model_config: Any) -> Dict[str, Any]:
+def google_gemini_resume_analysis(prompt: str, ai_model_config: Any) -> dict[str, Any]:
 	api_key = ai_model_config.get_password("api_key")
 	model_name = ai_model_config.get("model_name") or "gemini-2.5-flash"
 	url = (
-		"https://generativelanguage.googleapis.com/v1beta/"
-		f"models/{model_name}:generateContent?key={api_key}"
+		f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
 	)
 
 	payload = {
@@ -643,7 +646,7 @@ def get_google_doc_text(doc_url: str) -> str:
 		return ""
 
 
-def parse_and_validate_ai_response(ai_response: Optional[str]) -> Optional[Dict[str, Any]]:
+def parse_and_validate_ai_response(ai_response: str | None) -> dict[str, Any] | None:
 	if not ai_response or not isinstance(ai_response, str):
 		return None
 	try:
@@ -664,7 +667,7 @@ def parse_and_validate_ai_response(ai_response: Optional[str]) -> Optional[Dict[
 		return None
 
 
-def get_enabled_providers_for_company(company: Optional[str]) -> List[Any]:
+def get_enabled_providers_for_company(company: str | None) -> list[Any]:
 	"""
 	Multi-tenant provider selection filtering by company if configured.
 	"""
@@ -678,7 +681,7 @@ def get_enabled_providers_for_company(company: Optional[str]) -> List[Any]:
 	return frappe.get_all("Ai Model Config List", fields=["*"], filters={"enabled": 1})
 
 
-def safe_set_applicant_values(applicant_name: str, update_dict: Dict[str, Any]) -> None:
+def safe_set_applicant_values(applicant_name: str, update_dict: dict[str, Any]) -> None:
 	"""
 	Safely sets values on Job Applicant, filtering out fields that don't exist in the database table yet.
 	"""
@@ -691,7 +694,7 @@ def safe_set_applicant_values(applicant_name: str, update_dict: Dict[str, Any]) 
 		frappe.db.set_value("Job Applicant", applicant_name, valid_dict)
 
 
-def process_single_applicant(job_applicant: Any) -> Dict[str, Any]:
+def process_single_applicant(job_applicant: Any) -> dict[str, Any]:
 	"""
 	Enterprise processor for single Job Applicant.
 	Handles SHA256 duplicate detection, prompt versioning, provider failover, token cost calculation,
@@ -754,16 +757,6 @@ def process_single_applicant(job_applicant: Any) -> Dict[str, Any]:
 			providers_to_try.append(p)
 
 	success = False
-	last_error = ""
-
-	recommendation_rating_map = {
-		"Highly Recommended": 5,
-		"Recommended": 4,
-		"Consider": 3,
-		"Potential": 2,
-		"Reject": 1,
-	}
-
 	for idx, provider_config in enumerate(providers_to_try):
 		is_last_provider = idx == (len(providers_to_try) - 1)
 		ai_model_config = frappe.get_doc("Ai Model Config List", provider_config.name)
@@ -812,9 +805,21 @@ def process_single_applicant(job_applicant: Any) -> Dict[str, Any]:
 					else:
 						numeric_rating = 1
 
-				strengths_str = ", ".join(data.get("strengths", [])) if isinstance(data.get("strengths"), list) else str(data.get("strengths") or "")
-				missing_str = ", ".join(data.get("missing_skills", [])) if isinstance(data.get("missing_skills"), list) else str(data.get("missing_skills") or "")
-				extracted_skills_str = ", ".join(data.get("extracted_skills", [])) if isinstance(data.get("extracted_skills"), list) else str(data.get("extracted_skills") or "")
+				strengths_str = (
+					", ".join(data.get("strengths", []))
+					if isinstance(data.get("strengths"), list)
+					else str(data.get("strengths") or "")
+				)
+				missing_str = (
+					", ".join(data.get("missing_skills", []))
+					if isinstance(data.get("missing_skills"), list)
+					else str(data.get("missing_skills") or "")
+				)
+				extracted_skills_str = (
+					", ".join(data.get("extracted_skills", []))
+					if isinstance(data.get("extracted_skills"), list)
+					else str(data.get("extracted_skills") or "")
+				)
 
 				interview_questions_str = json.dumps(data.get("interview_questions", {}), indent=2)
 
@@ -845,9 +850,9 @@ def process_single_applicant(job_applicant: Any) -> Dict[str, Any]:
 				# Append to Job Applicant AI History Child Table safely
 				try:
 					job_applicant.reload()
-					setattr(job_applicant, "applicant_rating", numeric_rating)
+					job_applicant.applicant_rating = numeric_rating
 					if hasattr(job_applicant, "rating"):
-						setattr(job_applicant, "rating", numeric_rating)
+						job_applicant.rating = numeric_rating
 
 					if hasattr(job_applicant, "custom_ai_history"):
 						job_applicant.append(
@@ -926,7 +931,7 @@ def process_single_applicant(job_applicant: Any) -> Dict[str, Any]:
 	return {"status": "success", "applicant": job_applicant.name}
 
 
-def process_data(lst_job_applicants: List[Any]) -> None:
+def process_data(lst_job_applicants: list[Any]) -> None:
 	for applicant in lst_job_applicants:
 		if isinstance(applicant, dict):
 			applicant_doc = frappe.get_doc("Job Applicant", applicant.get("name"))
