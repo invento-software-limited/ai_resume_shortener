@@ -4,7 +4,7 @@ authors = [
     { name = "Invento Software Limited", email = "developer@invento.com.bd"}
 ]
 description = "Automate candidate resume screening, ATS scoring, and interview question generation for Frappe HR with multi-model AI failover and token cost tracking."
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
