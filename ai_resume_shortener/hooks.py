@@ -140,9 +140,16 @@ app_license = "mit"
 # 	}
 # }
 
+after_migrate = "ai_resume_shortener.ai_resume_shortener.utils.after_migrate.create_ai_provider_list"
+
 # Scheduled Tasks
 # ---------------
 
+scheduler_events = {
+	"hourly": [
+		"ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.resume_analysis_scheduler",
+	]
+}
 # scheduler_events = {
 # 	"all": [
 # 		"ai_resume_shortener.tasks.all"
@@ -250,3 +257,7 @@ app_license = "mit"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+
+# fixtures = [
+# 	{"dt": "Workspace", "filters": [["name", "in", ["Recruitment"]]]},
+# ]
