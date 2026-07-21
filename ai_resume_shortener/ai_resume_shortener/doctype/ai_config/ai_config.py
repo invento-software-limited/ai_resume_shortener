@@ -874,7 +874,6 @@ def process_single_applicant(job_applicant: Any) -> dict[str, Any]:
 							},
 						)
 					job_applicant.save(ignore_permissions=True)
-					frappe.db.commit()
 				except Exception as e:
 					frappe.log_error(f"Error appending to custom_ai_history: {e!s}")
 
