@@ -248,6 +248,3 @@ def create_ai_resume_shortener_workspace():
 				"content": content,
 			},
 		)
-
-	frappe.db.commit()
-	frappe.clear_cache()
