@@ -9,9 +9,10 @@ frappe.listview_settings["Job Applicant"] = {
 			}
 
 			frappe.confirm(
-				__("Are you sure you want to enqueue AI resume analysis for {0} selected applicant(s)?", [
-					selected_applicants.length,
-				]),
+				__(
+					"Are you sure you want to enqueue AI resume analysis for {0} selected applicant(s)?",
+					[selected_applicants.length]
+				),
 				function () {
 					frappe.call({
 						method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.enqueue_bulk_applicant_analysis",
@@ -31,7 +32,9 @@ frappe.listview_settings["Job Applicant"] = {
 								frappe.msgprint({
 									title: __("Error"),
 									indicator: "red",
-									message: r.message ? r.message.message : __("Failed to enqueue jobs."),
+									message: r.message
+										? r.message.message
+										: __("Failed to enqueue jobs."),
 								});
 							}
 						},
@@ -41,12 +44,16 @@ frappe.listview_settings["Job Applicant"] = {
 		});
 
 		// 2. Candidate Rankings Action
-		listview.page.add_inner_button(__("Candidate Rankings"), function () {
-			frappe.call({
-				method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.get_ranked_candidates",
-				callback(r) {
-					if (r.message) {
-						let rows = r.message.map((c) => `
+		listview.page.add_inner_button(
+			__("Candidate Rankings"),
+			function () {
+				frappe.call({
+					method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.get_ranked_candidates",
+					callback(r) {
+						if (r.message) {
+							let rows = r.message
+								.map(
+									(c) => `
 							<tr>
 								<td><b>#${c.rank}</b></td>
 								<td>${c.applicant_name}</td>
@@ -55,9 +62,11 @@ frappe.listview_settings["Job Applicant"] = {
 								<td>${c.custom_overall_score || 0}/100</td>
 								<td>${c.custom_recommendation || "-"}</td>
 							</tr>
-						`).join("");
+						`
+								)
+								.join("");
 
-						let html = `
+							let html = `
 							<table class="table table-bordered table-striped">
 								<thead>
 									<tr>
@@ -75,25 +84,35 @@ frappe.listview_settings["Job Applicant"] = {
 							</table>
 						`;
 
-						let d = new frappe.ui.Dialog({
-							title: __("Top Candidate Rankings"),
-							size: "large",
-							fields: [{ fieldtype: "HTML", fieldname: "rankings_html", options: html }]
-						});
-						d.show();
-					}
-				}
-			});
-		}, __("AI Actions"));
+							let d = new frappe.ui.Dialog({
+								title: __("Top Candidate Rankings"),
+								size: "large",
+								fields: [
+									{
+										fieldtype: "HTML",
+										fieldname: "rankings_html",
+										options: html,
+									},
+								],
+							});
+							d.show();
+						}
+					},
+				});
+			},
+			__("AI Actions")
+		);
 
 		// 3. Queue Dashboard & Retry Center Action
-		listview.page.add_inner_button(__("Queue Dashboard"), function () {
-			frappe.call({
-				method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.get_queue_metrics",
-				callback(r) {
-					if (r.message) {
-						let m = r.message;
-						let html = `
+		listview.page.add_inner_button(
+			__("Queue Dashboard"),
+			function () {
+				frappe.call({
+					method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.get_queue_metrics",
+					callback(r) {
+						if (r.message) {
+							let m = r.message;
+							let html = `
 							<div class="row text-center" style="margin-bottom: 15px;">
 								<div class="col-sm-3">
 									<div class="well">
@@ -122,28 +141,35 @@ frappe.listview_settings["Job Applicant"] = {
 							</div>
 						`;
 
-						let d = new frappe.ui.Dialog({
-							title: __("AI Processing Queue Dashboard"),
-							fields: [{ fieldtype: "HTML", fieldname: "queue_html", options: html }],
-							primary_action_label: __("Retry All Failed"),
-							primary_action() {
-								frappe.call({
-									method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.retry_failed_applicants",
-									callback(res) {
-										frappe.show_alert({
-											message: __("Enqueued {0} failed applicant(s) for retry.", [res.message.enqueued_count]),
-											indicator: "green"
-										});
-										d.hide();
-										listview.refresh();
-									}
-								});
-							}
-						});
-						d.show();
-					}
-				}
-			});
-		}, __("AI Actions"));
+							let d = new frappe.ui.Dialog({
+								title: __("AI Processing Queue Dashboard"),
+								fields: [
+									{ fieldtype: "HTML", fieldname: "queue_html", options: html },
+								],
+								primary_action_label: __("Retry All Failed"),
+								primary_action() {
+									frappe.call({
+										method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.retry_failed_applicants",
+										callback(res) {
+											frappe.show_alert({
+												message: __(
+													"Enqueued {0} failed applicant(s) for retry.",
+													[res.message.enqueued_count]
+												),
+												indicator: "green",
+											});
+											d.hide();
+											listview.refresh();
+										},
+									});
+								},
+							});
+							d.show();
+						}
+					},
+				});
+			},
+			__("AI Actions")
+		);
 	},
 };

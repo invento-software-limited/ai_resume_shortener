@@ -6,7 +6,7 @@ frappe.ui.form.on("Job Applicant", {
 				frappe.call({
 					method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.analyze_single_applicant",
 					args: {
-						job_applicant_name: frm.doc.name
+						job_applicant_name: frm.doc.name,
 					},
 					freeze: true,
 					freeze_message: __("Evaluating resume with AI model..."),
@@ -15,58 +15,70 @@ frappe.ui.form.on("Job Applicant", {
 							frappe.show_alert({
 								title: __("Analysis Completed"),
 								indicator: "green",
-								message: __("AI resume evaluation completed successfully!")
+								message: __("AI resume evaluation completed successfully!"),
 							});
 							frm.reload_doc();
 						} else {
 							frappe.msgprint({
 								title: __("Analysis Failed"),
 								indicator: "red",
-								message: r.message ? r.message.reason : __("Could not analyze resume.")
+								message: r.message
+									? r.message.reason
+									: __("Could not analyze resume."),
 							});
 							frm.reload_doc();
 						}
-					}
+					},
 				});
 			});
 
 			// Actions Group Sub-items
-			frm.add_custom_button(__("Enqueue Background Job"), function () {
-				frappe.call({
-					method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.enqueue_single_applicant_analysis",
-					args: {
-						job_applicant_name: frm.doc.name
-					},
-					freeze: true,
-					freeze_message: __("Enqueuing background job..."),
-					callback: function (r) {
-						if (r.message && r.message.status === "enqueued") {
-							frappe.show_alert({
-								title: __("Enqueued"),
-								indicator: "green",
-								message: __("Analysis job queued in background worker!")
-							});
-							frm.reload_doc();
-						} else {
-							frappe.msgprint({
-								title: __("Enqueue Failed"),
-								indicator: "red",
-								message: r.message ? r.message.reason : __("Failed to enqueue job.")
-							});
-						}
-					}
-				});
-			}, __("Actions"));
+			frm.add_custom_button(
+				__("Enqueue Background Job"),
+				function () {
+					frappe.call({
+						method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.enqueue_single_applicant_analysis",
+						args: {
+							job_applicant_name: frm.doc.name,
+						},
+						freeze: true,
+						freeze_message: __("Enqueuing background job..."),
+						callback: function (r) {
+							if (r.message && r.message.status === "enqueued") {
+								frappe.show_alert({
+									title: __("Enqueued"),
+									indicator: "green",
+									message: __("Analysis job queued in background worker!"),
+								});
+								frm.reload_doc();
+							} else {
+								frappe.msgprint({
+									title: __("Enqueue Failed"),
+									indicator: "red",
+									message: r.message
+										? r.message.reason
+										: __("Failed to enqueue job."),
+								});
+							}
+						},
+					});
+				},
+				__("Actions")
+			);
 
-			frm.add_custom_button(__("Benchmark Models"), function () {
-				frappe.call({
-					method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.benchmark_resume",
-					args: { job_applicant_name: frm.doc.name },
-					freeze: true,
-					freeze_message: __("Running AI benchmark across models..."),
-					callback: function (r) {
-						if (r.message && r.message.benchmark) {
-							let rows = r.message.benchmark.map((b) => `
+			frm.add_custom_button(
+				__("Benchmark Models"),
+				function () {
+					frappe.call({
+						method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.benchmark_resume",
+						args: { job_applicant_name: frm.doc.name },
+						freeze: true,
+						freeze_message: __("Running AI benchmark across models..."),
+						callback: function (r) {
+							if (r.message && r.message.benchmark) {
+								let rows = r.message.benchmark
+									.map(
+										(b) => `
 								<tr>
 									<td><b>${b.provider}</b></td>
 									<td>${b.model_name}</td>
@@ -76,9 +88,11 @@ frappe.ui.form.on("Job Applicant", {
 									<td>${b.overall_score}/100</td>
 									<td><span class="badge badge-info">${b.recommendation}</span></td>
 								</tr>
-							`).join("");
+							`
+									)
+									.join("");
 
-							let html = `
+								let html = `
 								<table class="table table-bordered table-striped">
 									<thead>
 										<tr>
@@ -95,16 +109,24 @@ frappe.ui.form.on("Job Applicant", {
 								</table>
 							`;
 
-							let d = new frappe.ui.Dialog({
-								title: __("AI Model Benchmark Comparison"),
-								size: "large",
-								fields: [{ fieldtype: "HTML", fieldname: "benchmark_html", options: html }]
-							});
-							d.show();
-						}
-					}
-				});
-			}, __("Actions"));
+								let d = new frappe.ui.Dialog({
+									title: __("AI Model Benchmark Comparison"),
+									size: "large",
+									fields: [
+										{
+											fieldtype: "HTML",
+											fieldname: "benchmark_html",
+											options: html,
+										},
+									],
+								});
+								d.show();
+							}
+						},
+					});
+				},
+				__("Actions")
+			);
 		}
-	}
+	},
 });
