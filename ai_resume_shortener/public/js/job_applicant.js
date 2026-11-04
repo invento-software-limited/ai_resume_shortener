@@ -1,32 +1,52 @@
+const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+
 frappe.ui.form.on("Job Applicant", {
+	setup(frm) {
+		frappe.realtime.on("ai_resume_analysis_done", (data) => {
+			if (!data || data.job_applicant !== frm.doc.name) return;
+			if (data.status === "success") {
+				frappe.show_alert({
+					title: __("Analysis Completed"),
+					indicator: "green",
+					message: __("AI resume evaluation completed successfully!"),
+				});
+			} else {
+				frappe.msgprint({
+					title: __("Analysis Failed"),
+					indicator: "red",
+					message: esc(data.reason || __("Could not analyze resume.")),
+				});
+			}
+			frm.reload_doc();
+		});
+	},
 	refresh(frm) {
 		if (!frm.is_new()) {
-			// Primary Action Button: Instant AI Analysis
+			// Primary Action Button: runs in the background queue so long AI calls can't time out the request
 			frm.add_custom_button(__("Analyze with AI"), function () {
 				frappe.call({
-					method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.analyze_single_applicant",
+					method: "ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.enqueue_single_applicant_analysis",
 					args: {
 						job_applicant_name: frm.doc.name,
 					},
 					freeze: true,
-					freeze_message: __("Evaluating resume with AI model..."),
+					freeze_message: __("Starting AI analysis..."),
 					callback: function (r) {
-						if (r.message && r.message.status === "success") {
+						if (r.message && r.message.status === "enqueued") {
 							frappe.show_alert({
-								title: __("Analysis Completed"),
-								indicator: "green",
-								message: __("AI resume evaluation completed successfully!"),
+								indicator: "blue",
+								message: __(
+									"AI analysis started. This page will refresh when it finishes."
+								),
 							});
-							frm.reload_doc();
 						} else {
 							frappe.msgprint({
 								title: __("Analysis Failed"),
 								indicator: "red",
-								message: r.message
-									? r.message.reason
-									: __("Could not analyze resume."),
+								message: frappe.utils.escape_html(
+									r.message ? r.message.reason : __("Could not analyze resume.")
+								),
 							});
-							frm.reload_doc();
 						}
 					},
 				});
@@ -55,9 +75,9 @@ frappe.ui.form.on("Job Applicant", {
 								frappe.msgprint({
 									title: __("Enqueue Failed"),
 									indicator: "red",
-									message: r.message
-										? r.message.reason
-										: __("Failed to enqueue job."),
+									message: esc(
+										r.message ? r.message.reason : __("Failed to enqueue job.")
+									),
 								});
 							}
 						},
@@ -80,13 +100,13 @@ frappe.ui.form.on("Job Applicant", {
 									.map(
 										(b) => `
 								<tr>
-									<td><b>${b.provider}</b></td>
-									<td>${b.model_name}</td>
-									<td>${b.execution_time_sec}s</td>
-									<td>${b.total_tokens}</td>
-									<td>$${b.estimated_cost_usd}</td>
-									<td>${b.overall_score}/100</td>
-									<td><span class="badge badge-info">${b.recommendation}</span></td>
+									<td><b>${esc(b.provider)}</b></td>
+									<td>${esc(b.model_name)}</td>
+									<td>${esc(b.execution_time_sec)}s</td>
+									<td>${esc(b.total_tokens)}</td>
+									<td>$${esc(b.estimated_cost_usd)}</td>
+									<td>${esc(b.overall_score)}/100</td>
+									<td><span class="badge badge-info">${esc(b.recommendation)}</span></td>
 								</tr>
 							`
 									)

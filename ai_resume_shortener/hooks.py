@@ -4,7 +4,7 @@ app_publisher = "Invento Software Limited"
 app_description = "Automate candidate resume screening, ATS scoring, and interview question generation for Frappe HR with multi-model AI failover and token cost tracking."
 app_email = "hello@invento.com.bd"
 app_license = "mit"
-app_logo_url = "/assets/ai_resume_shortener/logo.png"
+app_logo_url = "/assets/ai_resume_shortener/images/ai_resume_shortener_logo.svg"
 
 # Apps
 # ------------------
@@ -258,6 +258,5 @@ scheduler_events = {
 # ignore_translatable_strings_from = []
 
 
-fixtures = [
-	{"dt": "Workspace", "filters": [["module", "=", "Ai Resume Shortener"]]},
-]
+# The Workspace is a standard document (ai_resume_shortener/workspace/), so it is not exported as a fixture.
+fixtures = []
