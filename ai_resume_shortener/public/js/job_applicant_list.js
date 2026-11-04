@@ -1,3 +1,5 @@
+const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+
 frappe.listview_settings["Job Applicant"] = {
 	onload(listview) {
 		// 1. Bulk Analyze Action
@@ -32,9 +34,9 @@ frappe.listview_settings["Job Applicant"] = {
 								frappe.msgprint({
 									title: __("Error"),
 									indicator: "red",
-									message: r.message
-										? r.message.message
-										: __("Failed to enqueue jobs."),
+									message: esc(
+										r.message ? r.message.message : __("Failed to enqueue jobs.")
+									),
 								});
 							}
 						},
@@ -55,12 +57,12 @@ frappe.listview_settings["Job Applicant"] = {
 								.map(
 									(c) => `
 							<tr>
-								<td><b>#${c.rank}</b></td>
-								<td>${c.applicant_name}</td>
-								<td>${c.job_title || "-"}</td>
-								<td><span class="badge badge-success">${c.custom_match_percentage || 0}%</span></td>
-								<td>${c.custom_overall_score || 0}/100</td>
-								<td>${c.custom_recommendation || "-"}</td>
+								<td><b>#${esc(c.rank)}</b></td>
+								<td>${esc(c.applicant_name)}</td>
+								<td>${esc(c.job_title || "-")}</td>
+								<td><span class="badge badge-success">${esc(c.custom_match_percentage || 0)}%</span></td>
+								<td>${esc(c.custom_overall_score || 0)}/100</td>
+								<td>${esc(c.custom_recommendation || "-")}</td>
 							</tr>
 						`
 								)
@@ -116,25 +118,25 @@ frappe.listview_settings["Job Applicant"] = {
 							<div class="row text-center" style="margin-bottom: 15px;">
 								<div class="col-sm-3">
 									<div class="well">
-										<h3>${m.pending}</h3>
+										<h3>${esc(m.pending)}</h3>
 										<p class="text-muted">Pending</p>
 									</div>
 								</div>
 								<div class="col-sm-3">
 									<div class="well">
-										<h3 class="text-success">${m.completed}</h3>
+										<h3 class="text-success">${esc(m.completed)}</h3>
 										<p class="text-muted">Completed</p>
 									</div>
 								</div>
 								<div class="col-sm-3">
 									<div class="well">
-										<h3 class="text-danger">${m.failed}</h3>
+										<h3 class="text-danger">${esc(m.failed)}</h3>
 										<p class="text-muted">Failed</p>
 									</div>
 								</div>
 								<div class="col-sm-3">
 									<div class="well">
-										<h3>${m.total_logs}</h3>
+										<h3>${esc(m.total_logs)}</h3>
 										<p class="text-muted">Total Logs</p>
 									</div>
 								</div>

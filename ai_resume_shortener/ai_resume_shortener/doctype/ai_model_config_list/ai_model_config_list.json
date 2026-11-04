@@ -13,7 +13,8 @@
   "api_key",
   "input_cost_per_1m",
   "output_cost_per_1m",
-  "enabled"
+  "enabled",
+  "is_default"
  ],
  "fields": [
   {
@@ -61,13 +62,21 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Enabled"
+  },
+  {
+   "default": "0",
+   "description": "Try this model first. Other enabled models are used as failover.",
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Is Default"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-07-04 15:31:25.931371",
+ "modified": "2026-11-04 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Ai Resume Shortener",
  "name": "Ai Model Config List",

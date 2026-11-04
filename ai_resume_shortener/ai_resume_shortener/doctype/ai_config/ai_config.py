@@ -7,11 +7,11 @@ import re
 import time
 from io import BytesIO
 from typing import Any
-from urllib.parse import urlparse
 
 import frappe
 import requests
 from frappe.model.document import Document
+from frappe.utils import add_to_date, cint, escape_html, flt, now_datetime, strip_html_tags
 from pypdf import PdfReader
 
 try:
@@ -25,6 +25,28 @@ from ai_resume_shortener.ai_resume_shortener.doctype.ai_analysis_log.ai_analysis
 
 
 class AiConfig(Document):
+	def validate(self):
+		defaults = [row for row in self.model_config_list if row.is_default]
+		if len(defaults) > 1:
+			frappe.throw("Only one model row can be marked as 'Is Default'.")
+
+
+PROCESS_METHOD = (
+	"ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.process_single_applicant_by_name"
+)
+JOB_TIMEOUT = 900
+AI_REQUEST_TIMEOUT = 120
+STALE_QUEUE_MINUTES = 30
+MAX_RESUME_CHARS = 30000
+MAX_JOB_DESC_CHARS = 10000
+MAX_OUTPUT_TOKENS = 8192
+MANAGER_ROLES = ("HR Manager", "System Manager")
+
+# Index = star rating (1-5)
+RECOMMENDATION_OPTIONS = ("", "Reject", "Potential", "Consider", "Recommended", "Highly Recommended")
+
+
+class ResumeParseError(Exception):
 	pass
 
 
@@ -75,58 +97,121 @@ Resume: {resume_text}
 Important: Return ONLY valid JSON."""
 
 
+# ---------------------------------------------------------------------------
+# Queue helpers
+# ---------------------------------------------------------------------------
+
+
+def has_active_queued_log(job_applicant_name: str) -> bool:
+	"""A Queued log counts as active only if it is recent; older ones belong to crashed/killed jobs."""
+	cutoff = add_to_date(now_datetime(), minutes=-STALE_QUEUE_MINUTES)
+	return bool(
+		frappe.db.exists(
+			"Ai Analysis Log",
+			{"job_applicant": job_applicant_name, "status": "Queued", "creation": [">", cutoff]},
+		)
+	)
+
+
+def expire_stale_queued_logs(job_applicant_name: str) -> None:
+	stale_logs = frappe.get_all(
+		"Ai Analysis Log",
+		filters={"job_applicant": job_applicant_name, "status": "Queued"},
+		pluck="name",
+	)
+	for log_name in stale_logs:
+		frappe.db.set_value(
+			"Ai Analysis Log",
+			log_name,
+			{"status": "Failed", "error_message": "Job did not finish (worker crash or timeout)."},
+		)
+
+
+def enqueue_applicant_analysis(job_applicant_name: str, message: str) -> bool:
+	"""Creates a Queued log and enqueues the analysis job. Returns False if a job is already queued."""
+	if has_active_queued_log(job_applicant_name):
+		return False
+
+	expire_stale_queued_logs(job_applicant_name)
+	provider, model = get_default_provider_and_model()
+	create_ai_log(
+		job_applicant=job_applicant_name,
+		service_provider=provider,
+		model_name=model,
+		status="Queued",
+		error_message=message,
+	)
+	frappe.enqueue(
+		PROCESS_METHOD,
+		queue="default",
+		job_applicant_name=job_applicant_name,
+		timeout=JOB_TIMEOUT,
+		enqueue_after_commit=True,
+		now=getattr(frappe.flags, "in_test", False),
+	)
+	return True
+
+
 def resume_analysis_scheduler() -> None:
 	"""
 	Scheduled task running hourly. Enqueues individual background jobs per unanalyzed job applicant.
+	Only runs when 'Enable Hourly Auto Analysis' is ticked in Ai Config.
 	"""
-	lst_job_applicants = frappe.get_all("Job Applicant", filters={"custom_is_success": 0}, fields=["name"])
-	if not lst_job_applicants:
+	if not frappe.db.get_single_value("Ai Config", "enable_auto_analysis"):
 		return
 
-	provider, model = get_default_provider_and_model()
+	lst_job_applicants = frappe.get_all("Job Applicant", filters={"custom_is_success": 0}, pluck="name")
+	for applicant_name in lst_job_applicants:
+		enqueue_applicant_analysis(applicant_name, "Hourly scheduled analysis job added to queue")
 
-	for applicant in lst_job_applicants:
-		if frappe.db.exists("Ai Analysis Log", {"job_applicant": applicant.name, "status": "Queued"}):
-			continue
 
-		create_ai_log(
-			job_applicant=applicant.name,
-			service_provider=provider,
-			model_name=model,
-			status="Queued",
-			error_message="Hourly scheduled analysis job added to queue",
+# ---------------------------------------------------------------------------
+# Provider selection
+# ---------------------------------------------------------------------------
+
+
+def get_enabled_providers_for_company(company: str | None) -> list[Any]:
+	"""
+	Multi-tenant provider selection filtering by company if configured.
+	"""
+	filters = {"enabled": 1, "parenttype": "Ai Config"}
+	if company:
+		comp_providers = frappe.get_all(
+			"Ai Model Config List", fields=["*"], filters={**filters, "company": company}, order_by="idx asc"
 		)
-		frappe.enqueue(
-			"ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.process_single_applicant_by_name",
-			queue="default",
-			job_applicant_name=applicant.name,
-			timeout=300,
-			now=getattr(frappe.flags, "in_test", False),
-		)
+		if comp_providers:
+			return comp_providers
+
+	return frappe.get_all("Ai Model Config List", fields=["*"], filters=filters, order_by="idx asc")
+
+
+def order_providers(providers: list[Any]) -> list[Any]:
+	"""Puts the default model first ('Is Default' row, or the legacy 'default' field); rest are failover."""
+	legacy_default = frappe.db.get_single_value("Ai Config", "default")
+	return sorted(providers, key=lambda p: 0 if (p.get("is_default") or p.name == legacy_default) else 1)
 
 
 def get_default_provider_and_model() -> tuple[str, str]:
-	try:
-		default_config = frappe.get_all(
-			"Ai Model Config List",
-			fields=["service_provider", "model_name"],
-			filters={"enabled": 1},
-			order_by="idx asc",
-			limit=1,
+	providers = order_providers(get_enabled_providers_for_company(None))
+	if providers:
+		return (
+			providers[0].get("service_provider") or "Google Gemini",
+			providers[0].get("model_name") or "gemini-2.5-flash",
 		)
-		if default_config:
-			provider = default_config[0].get("service_provider") or "Google Gemini"
-			model = default_config[0].get("model_name") or "gemini-2.5-flash"
-			return provider, model
-	except Exception:
-		pass
 	return "Google Gemini", "gemini-2.5-flash"
+
+
+# ---------------------------------------------------------------------------
+# Whitelisted API
+# ---------------------------------------------------------------------------
 
 
 @frappe.whitelist()
 def analyze_single_applicant(job_applicant_name: str) -> dict[str, Any]:
+	"""Synchronous analysis (API use). The desk button uses the background queue instead."""
 	if not job_applicant_name:
 		frappe.throw("Job Applicant name is required.")
+	frappe.has_permission("Job Applicant", "write", doc=job_applicant_name, throw=True)
 	return process_single_applicant_by_name(job_applicant_name)
 
 
@@ -134,37 +219,15 @@ def analyze_single_applicant(job_applicant_name: str) -> dict[str, Any]:
 def enqueue_single_applicant_analysis(job_applicant_name: str) -> dict[str, Any]:
 	if not job_applicant_name:
 		frappe.throw("Job Applicant name is required.")
-
-	if frappe.db.exists("Ai Analysis Log", {"job_applicant": job_applicant_name, "status": "Queued"}):
-		return {"status": "enqueued", "message": f"Job for {job_applicant_name} is already queued."}
-
-	provider, model = get_default_provider_and_model()
-	create_ai_log(
-		job_applicant=job_applicant_name,
-		service_provider=provider,
-		model_name=model,
-		status="Queued",
-		error_message="Analysis job added to background queue",
-	)
+	frappe.has_permission("Job Applicant", "write", doc=job_applicant_name, throw=True)
 
 	try:
-		frappe.enqueue(
-			"ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.process_single_applicant_by_name",
-			queue="default",
-			job_applicant_name=job_applicant_name,
-			timeout=300,
-			now=getattr(frappe.flags, "in_test", False),
-		)
+		if not enqueue_applicant_analysis(job_applicant_name, "Analysis job added to background queue"):
+			return {"status": "enqueued", "message": f"Job for {job_applicant_name} is already queued."}
 		return {"status": "enqueued", "message": f"Enqueued AI analysis job for {job_applicant_name}"}
 	except Exception as e:
 		err = f"Enqueue Error: {e!s}"
-		create_ai_log(
-			job_applicant=job_applicant_name,
-			service_provider=provider,
-			model_name=model,
-			status="Failed",
-			error_message=err,
-		)
+		create_ai_log(job_applicant=job_applicant_name, status="Failed", error_message=err)
 		return {"status": "failed", "reason": err}
 
 
@@ -179,27 +242,11 @@ def enqueue_bulk_applicant_analysis(job_applicant_names: Any) -> dict[str, Any]:
 	if not isinstance(job_applicant_names, list) or not job_applicant_names:
 		frappe.throw("No job applicants specified.")
 
-	provider, model = get_default_provider_and_model()
 	enqueued_count = 0
 	for name in job_applicant_names:
-		if frappe.db.exists("Ai Analysis Log", {"job_applicant": name, "status": "Queued"}):
-			continue
-
-		create_ai_log(
-			job_applicant=name,
-			service_provider=provider,
-			model_name=model,
-			status="Queued",
-			error_message="Bulk analysis job added to background queue",
-		)
-		frappe.enqueue(
-			"ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.process_single_applicant_by_name",
-			queue="default",
-			job_applicant_name=name,
-			timeout=300,
-			now=getattr(frappe.flags, "in_test", False),
-		)
-		enqueued_count += 1
+		frappe.has_permission("Job Applicant", "write", doc=name, throw=True)
+		if enqueue_applicant_analysis(name, "Bulk analysis job added to background queue"):
+			enqueued_count += 1
 
 	return {
 		"status": "enqueued",
@@ -217,7 +264,8 @@ def get_ranked_candidates(job_title: str | None = None) -> list[dict[str, Any]]:
 	if job_title:
 		filters["job_title"] = job_title
 
-	candidates = frappe.get_all(
+	# get_list (not get_all) so the user's Job Applicant permissions are applied
+	candidates = frappe.get_list(
 		"Job Applicant",
 		filters=filters,
 		fields=[
@@ -244,16 +292,12 @@ def get_queue_metrics() -> dict[str, Any]:
 	"""
 	Queue Dashboard API returning Pending, Completed, and Failed applicant counts.
 	"""
-	pending_count = frappe.db.count("Job Applicant", filters={"custom_is_success": 0})
-	completed_count = frappe.db.count("Job Applicant", filters={"custom_is_success": 1})
-	failed_count = frappe.db.count("Job Applicant", filters={"custom_is_success": -1})
-	total_logs = frappe.db.count("Ai Analysis Log")
-
+	frappe.has_permission("Job Applicant", "read", throw=True)
 	return {
-		"pending": pending_count,
-		"completed": completed_count,
-		"failed": failed_count,
-		"total_logs": total_logs,
+		"pending": frappe.db.count("Job Applicant", filters={"custom_is_success": 0}),
+		"completed": frappe.db.count("Job Applicant", filters={"custom_is_success": 1}),
+		"failed": frappe.db.count("Job Applicant", filters={"custom_is_success": -1}),
+		"total_logs": frappe.db.count("Ai Analysis Log"),
 	}
 
 
@@ -262,19 +306,14 @@ def retry_failed_applicants() -> dict[str, Any]:
 	"""
 	Enqueues all failed applicants for re-analysis.
 	"""
-	failed_applicants = frappe.get_all("Job Applicant", filters={"custom_is_success": -1}, fields=["name"])
+	frappe.only_for(MANAGER_ROLES)
+	failed_applicants = frappe.get_all("Job Applicant", filters={"custom_is_success": -1}, pluck="name")
 	enqueued_count = 0
 
-	for app in failed_applicants:
-		frappe.db.set_value("Job Applicant", app.name, "custom_is_success", 0)
-		frappe.enqueue(
-			"ai_resume_shortener.ai_resume_shortener.doctype.ai_config.ai_config.process_single_applicant_by_name",
-			queue="long",
-			job_applicant_name=app.name,
-			timeout=300,
-			now=getattr(frappe.flags, "in_test", False),
-		)
-		enqueued_count += 1
+	for name in failed_applicants:
+		frappe.db.set_value("Job Applicant", name, "custom_is_success", 0)
+		if enqueue_applicant_analysis(name, "Retry of failed analysis added to queue"):
+			enqueued_count += 1
 
 	return {"status": "success", "enqueued_count": enqueued_count}
 
@@ -284,12 +323,16 @@ def benchmark_resume(job_applicant_name: str) -> dict[str, Any]:
 	"""
 	AI Benchmark Tool: Analyzes a resume across all enabled AI models and returns comparative metrics.
 	"""
-	job_applicant = frappe.get_doc("Job Applicant", job_applicant_name)
-	resume_text, _ = get_resume_text_and_hash(job_applicant)
-	if not resume_text:
-		frappe.throw("Could not extract resume text for benchmark.")
+	frappe.only_for(MANAGER_ROLES)
+	frappe.has_permission("Job Applicant", "read", doc=job_applicant_name, throw=True)
 
-	ai_providers = frappe.get_all("Ai Model Config List", fields=["*"], filters={"enabled": 1})
+	job_applicant = frappe.get_doc("Job Applicant", job_applicant_name)
+	try:
+		resume_text, _ = get_resume_text_and_hash(job_applicant)
+	except ResumeParseError as e:
+		frappe.throw(f"Could not extract resume text for benchmark: {e!s}")
+
+	ai_providers = get_enabled_providers_for_company(None)
 	if not ai_providers:
 		frappe.throw("No enabled AI models configured.")
 
@@ -316,16 +359,16 @@ def benchmark_resume(job_applicant_name: str) -> dict[str, Any]:
 				"total_tokens": response.get("total_tokens"),
 				"estimated_cost_usd": cost,
 				"overall_score": data.get("overall_score") if data else 0,
-				"recommendation": data.get("recommendation") if data else "Failed",
+				"recommendation": normalize_recommendation(data)[0] if data else "Failed",
 			}
 		)
 
 	return {"job_applicant": job_applicant_name, "benchmark": benchmark_results}
 
 
-def process_single_applicant_by_name(job_applicant_name: str) -> dict[str, Any]:
-	job_applicant = frappe.get_doc("Job Applicant", job_applicant_name)
-	return process_single_applicant(job_applicant)
+# ---------------------------------------------------------------------------
+# Prompt & AI calls
+# ---------------------------------------------------------------------------
 
 
 def get_active_prompt_template() -> tuple[str, str]:
@@ -353,9 +396,18 @@ def get_configured_prompt(job_desc: str, resume_text: str) -> tuple[str, str]:
 	template, version_name = get_active_prompt_template()
 	try:
 		formatted = template.format(job_desc=job_desc, resume_text=resume_text)
-	except Exception:
-		formatted = f"{template}\n\nJob Description: {job_desc}\nResume: {resume_text}"
+	except (KeyError, IndexError, ValueError):
+		# Custom templates often contain raw JSON braces; fall back to plain placeholder replacement
+		if "{job_desc}" in template or "{resume_text}" in template:
+			formatted = template.replace("{job_desc}", job_desc).replace("{resume_text}", resume_text)
+		else:
+			formatted = f"{template}\n\nJob Description: {job_desc}\nResume: {resume_text}"
 	return formatted, version_name
+
+
+def get_job_description(job_applicant: Any) -> str:
+	job_desc = frappe.db.get_value("Job Opening", job_applicant.get("job_title"), "description") or ""
+	return strip_html_tags(job_desc).strip()[:MAX_JOB_DESC_CHARS]
 
 
 def calculate_request_cost(
@@ -370,44 +422,38 @@ def calculate_request_cost(
 	return round(input_cost + output_cost, 6)
 
 
+def _error_response(provider: str | None, model_name: str | None, status_code: int, error: str, **extra):
+	return {
+		"status_code": status_code,
+		"response": None,
+		"provider": provider,
+		"model_name": model_name,
+		"execution_time": 0.0,
+		"prompt_tokens": 0,
+		"completion_tokens": 0,
+		"total_tokens": 0,
+		"error": error,
+		**extra,
+	}
+
+
 def get_resume_analysis_ai_response(
 	job_applicant: Any, resume_text: str, ai_model_config: Any
 ) -> dict[str, Any]:
-	job_desc = frappe.db.get_value("Job Opening", job_applicant.get("job_title"), "description") or ""
-	prompt, prompt_version = get_configured_prompt(job_desc, resume_text)
+	prompt, prompt_version = get_configured_prompt(
+		get_job_description(job_applicant), resume_text[:MAX_RESUME_CHARS]
+	)
 
 	service_provider = ai_model_config.get("service_provider")
+	model_name = ai_model_config.get("model_name")
 	if not ai_model_config.get("enabled") or not ai_model_config.get("api_key"):
-		return {
-			"status_code": 400,
-			"response": None,
-			"provider": service_provider,
-			"model_name": ai_model_config.get("model_name"),
-			"prompt_version": prompt_version,
-			"execution_time": 0.0,
-			"prompt_tokens": 0,
-			"completion_tokens": 0,
-			"total_tokens": 0,
-			"error": "Provider disabled or API key missing",
-		}
-
-	if service_provider == "OpenRouter":
+		res = _error_response(service_provider, model_name, 400, "Provider disabled or API key missing")
+	elif service_provider == "OpenRouter":
 		res = openrouter_resume_analysis(prompt, ai_model_config)
 	elif service_provider == "Google Gemini":
 		res = google_gemini_resume_analysis(prompt, ai_model_config)
 	else:
-		res = {
-			"status_code": 400,
-			"response": None,
-			"provider": service_provider,
-			"model_name": ai_model_config.get("model_name"),
-			"prompt_version": prompt_version,
-			"execution_time": 0.0,
-			"prompt_tokens": 0,
-			"completion_tokens": 0,
-			"total_tokens": 0,
-			"error": f"Unsupported provider: {service_provider}",
-		}
+		res = _error_response(service_provider, model_name, 400, f"Unsupported provider: {service_provider}")
 
 	res["prompt_version"] = prompt_version
 	return res
@@ -427,19 +473,19 @@ def openrouter_resume_analysis(prompt: str, ai_model_config: Any) -> dict[str, A
 		"model": model_name,
 		"messages": [{"role": "user", "content": prompt}],
 		"response_format": {"type": "json_object"},
-		"max_tokens": 2000,
+		"max_tokens": MAX_OUTPUT_TOKENS,
 		"temperature": 0.2,
 	}
 
 	start_time = time.time()
 	try:
-		response = requests.post(url, headers=headers, json=payload, timeout=60)
+		response = requests.post(url, headers=headers, json=payload, timeout=AI_REQUEST_TIMEOUT)
 		execution_time = round(time.time() - start_time, 3)
 
 		if response.status_code == 200:
 			resp_json = response.json()
-			content = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
-			usage = resp_json.get("usage", {})
+			content = (resp_json.get("choices") or [{}])[0].get("message", {}).get("content", "")
+			usage = resp_json.get("usage") or {}
 			prompt_tokens = usage.get("prompt_tokens", 0)
 			completion_tokens = usage.get("completion_tokens", 0)
 
@@ -456,50 +502,44 @@ def openrouter_resume_analysis(prompt: str, ai_model_config: Any) -> dict[str, A
 			}
 		else:
 			return {
-				"status_code": response.status_code,
+				**_error_response(
+					"OpenRouter",
+					model_name,
+					response.status_code,
+					f"OpenRouter HTTP {response.status_code}: {response.text[:2000]}",
+				),
 				"response": response.text,
-				"provider": "OpenRouter",
-				"model_name": model_name,
 				"execution_time": execution_time,
-				"prompt_tokens": 0,
-				"completion_tokens": 0,
-				"total_tokens": 0,
-				"error": f"OpenRouter HTTP {response.status_code}: {response.text}",
 			}
 	except Exception as e:
-		execution_time = round(time.time() - start_time, 3)
 		return {
-			"status_code": 500,
-			"response": None,
-			"provider": "OpenRouter",
-			"model_name": model_name,
-			"execution_time": execution_time,
-			"prompt_tokens": 0,
-			"completion_tokens": 0,
-			"total_tokens": 0,
-			"error": f"OpenRouter Exception: {e!s}",
+			**_error_response("OpenRouter", model_name, 500, f"OpenRouter Exception: {e!s}"),
+			"execution_time": round(time.time() - start_time, 3),
 		}
 
 
 def google_gemini_resume_analysis(prompt: str, ai_model_config: Any) -> dict[str, Any]:
 	api_key = ai_model_config.get_password("api_key")
 	model_name = ai_model_config.get("model_name") or "gemini-2.5-flash"
-	url = (
-		f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-	)
+	# API key goes in a header, not the URL, so it never ends up in proxy/server logs or tracebacks
+	url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
 
 	payload = {
 		"contents": [{"parts": [{"text": prompt}]}],
-		"generationConfig": {"response_mime_type": "application/json"},
+		"generationConfig": {
+			"response_mime_type": "application/json",
+			"maxOutputTokens": MAX_OUTPUT_TOKENS,
+			"temperature": 0.2,
+		},
 	}
 
 	start_time = time.time()
 	try:
 		response = requests.post(
 			url,
-			headers={"Content-Type": "application/json"},
+			headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
 			json=payload,
-			timeout=60,
+			timeout=AI_REQUEST_TIMEOUT,
 		)
 		execution_time = round(time.time() - start_time, 3)
 
@@ -508,10 +548,10 @@ def google_gemini_resume_analysis(prompt: str, ai_model_config: Any) -> dict[str
 			content = None
 			try:
 				content = resp_json["candidates"][0]["content"]["parts"][0]["text"]
-			except (KeyError, IndexError):
+			except (KeyError, IndexError, TypeError):
 				content = None
 
-			usage = resp_json.get("usageMetadata", {})
+			usage = resp_json.get("usageMetadata") or {}
 			prompt_tokens = usage.get("promptTokenCount", 0)
 			completion_tokens = usage.get("candidatesTokenCount", 0)
 
@@ -528,157 +568,245 @@ def google_gemini_resume_analysis(prompt: str, ai_model_config: Any) -> dict[str
 			}
 		else:
 			return {
-				"status_code": response.status_code,
+				**_error_response(
+					"Google Gemini",
+					model_name,
+					response.status_code,
+					f"Gemini HTTP {response.status_code}: {response.text[:2000]}",
+				),
 				"response": response.text,
-				"provider": "Google Gemini",
-				"model_name": model_name,
 				"execution_time": execution_time,
-				"prompt_tokens": 0,
-				"completion_tokens": 0,
-				"total_tokens": 0,
-				"error": f"Gemini HTTP {response.status_code}: {response.text}",
 			}
 	except Exception as e:
-		execution_time = round(time.time() - start_time, 3)
 		return {
-			"status_code": 500,
-			"response": None,
-			"provider": "Google Gemini",
-			"model_name": model_name,
-			"execution_time": execution_time,
-			"prompt_tokens": 0,
-			"completion_tokens": 0,
-			"total_tokens": 0,
-			"error": f"Gemini Exception: {e!s}",
+			**_error_response("Google Gemini", model_name, 500, f"Gemini Exception: {e!s}"),
+			"execution_time": round(time.time() - start_time, 3),
 		}
 
 
-def extract_docx_text(file_content: bytes) -> str:
-	if not docx:
-		raise RuntimeError("python-docx package is not installed.")
-	doc = docx.Document(BytesIO(file_content))
-	full_text = [para.text for para in doc.paragraphs if para.text]
-	return "\n".join(full_text)
+# ---------------------------------------------------------------------------
+# Resume extraction
+# ---------------------------------------------------------------------------
 
 
 def calculate_sha256_hash(content: bytes) -> str:
 	return hashlib.sha256(content).hexdigest()
 
 
-def get_resume_text_and_hash(job_applicant: Any) -> tuple[str, str]:
-	try:
-		resume_text = ""
-		file_hash = ""
+def extract_pdf_text(file_content: bytes) -> str:
+	pdf_reader = PdfReader(BytesIO(file_content))
+	return "\n".join(page.extract_text() or "" for page in pdf_reader.pages)
 
+
+def extract_docx_text(file_content: bytes) -> str:
+	if not docx:
+		raise ResumeParseError("python-docx package is not installed on the server.")
+	doc = docx.Document(BytesIO(file_content))
+	return "\n".join(para.text for para in doc.paragraphs if para.text)
+
+
+def extract_text_from_bytes(file_content: bytes, file_name: str = "") -> str:
+	"""Detects the file type from extension, falling back to magic bytes, and extracts its text."""
+	name = (file_name or "").lower()
+
+	if name.endswith(".doc") and not file_content.startswith(b"PK"):
+		raise ResumeParseError("Legacy .doc files are not supported. Please upload PDF or DOCX.")
+	if name.endswith(".txt"):
+		return file_content.decode("utf-8", errors="ignore")
+	if name.endswith(".pdf") or file_content.startswith(b"%PDF"):
+		return extract_pdf_text(file_content)
+	if name.endswith(".docx") or file_content.startswith(b"PK"):
+		return extract_docx_text(file_content)
+	if file_content.lstrip()[:15].lower().startswith((b"<!doctype html", b"<html")):
+		raise ResumeParseError("Resume link returned a web page, not a file. Check the sharing settings.")
+
+	raise ResumeParseError(f"Unsupported resume file type: {file_name or 'unknown'}")
+
+
+def get_resume_text_and_hash(job_applicant: Any) -> tuple[str, str]:
+	"""
+	Returns (resume_text, sha256_of_content). Raises ResumeParseError with a readable reason on failure.
+	"""
+	try:
 		if job_applicant.get("resume_link"):
 			link = job_applicant.get("resume_link")
-			if "drive.google.com" in link:
-				resume_text = read_google_drive(link)
-			elif "docs.google.com" in link:
+			if "docs.google.com" in link:
 				resume_text = get_google_doc_text(link)
-			file_hash = hashlib.sha256(link.encode("utf-8")).hexdigest()
+				file_hash = calculate_sha256_hash(resume_text.encode("utf-8"))
+			elif "drive.google.com" in link:
+				file_content = read_google_drive(link)
+				file_hash = calculate_sha256_hash(file_content)
+				resume_text = extract_text_from_bytes(file_content)
+			else:
+				raise ResumeParseError("Only Google Drive and Google Docs resume links are supported.")
 
 		elif job_applicant.get("resume_attachment"):
 			file_doc = frappe.get_doc("File", {"file_url": job_applicant.get("resume_attachment")})
 			file_content = file_doc.get_content()
-
 			if isinstance(file_content, str):
 				file_content = file_content.encode("utf-8")
 
 			file_hash = calculate_sha256_hash(file_content)
-			file_name = (file_doc.file_name or "").lower()
+			resume_text = extract_text_from_bytes(file_content, file_doc.file_name)
+		else:
+			raise ResumeParseError("Missing resume attachment or link.")
 
-			if file_name.endswith(".pdf"):
-				pdf_reader = PdfReader(BytesIO(file_content))
-				resume_text = "".join([page.extract_text() or "" for page in pdf_reader.pages])
-			elif file_name.endswith(".docx") or file_name.endswith(".doc"):
-				try:
-					resume_text = extract_docx_text(file_content)
-				except Exception:
-					pass
-			elif file_name.endswith(".txt"):
-				resume_text = file_content.decode("utf-8", errors="ignore")
-			else:
-				try:
-					pdf_reader = PdfReader(BytesIO(file_content))
-					resume_text = "".join([page.extract_text() or "" for page in pdf_reader.pages])
-				except Exception:
-					pass
-
-		return resume_text.strip(), file_hash
+	except ResumeParseError:
+		raise
 	except Exception as e:
 		frappe.log_error(
-			message=f"Error in get_resume_text_and_hash: {e!s}",
+			message=frappe.get_traceback(),
 			reference_doctype="Job Applicant",
 			reference_name=job_applicant.name,
 			title="Resume Hash & Extraction Error",
 		)
-		return "", ""
+		raise ResumeParseError(f"Could not read resume: {e!s}")
+
+	resume_text = (resume_text or "").strip()
+	if not resume_text:
+		raise ResumeParseError(
+			"No text found in resume (it may be a scanned image or an empty/protected file)."
+		)
+	return resume_text, file_hash
 
 
-def read_google_drive(url: str) -> str:
+def read_google_drive(url: str) -> bytes:
 	file_id_match = re.search(r"id=([a-zA-Z0-9_-]+)", url) or re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
-	if file_id_match:
-		file_id = file_id_match.group(1)
-		download = f"https://drive.google.com/uc?export=download&id={file_id}"
-		response = requests.get(download, timeout=30)
-		file_content = response.content
-		if isinstance(file_content, str):
-			file_content = file_content.encode()
-		try:
-			pdf_reader = PdfReader(BytesIO(file_content))
-			return "".join([page.extract_text() or "" for page in pdf_reader.pages])
-		except Exception:
-			return ""
-	return ""
+	if not file_id_match:
+		raise ResumeParseError("Could not find a file ID in the Google Drive link.")
+
+	# drive.usercontent + confirm=t skips the "can't scan for viruses" HTML page for large files
+	response = requests.get(
+		"https://drive.usercontent.google.com/download",
+		params={"id": file_id_match.group(1), "export": "download", "confirm": "t"},
+		timeout=30,
+	)
+	if response.status_code != 200:
+		raise ResumeParseError(
+			f"Google Drive download failed (HTTP {response.status_code}). Make sure the file is shared publicly."
+		)
+	return response.content
 
 
 def get_google_doc_text(doc_url: str) -> str:
-	try:
-		doc_id = doc_url.split("/d/")[1].split("/")[0]
-		domain = urlparse(doc_url).netloc.lower()
-		if "docs.google.com" not in domain:
-			return ""
-		url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
-		response = requests.get(url, timeout=30)
-		return response.text if response.status_code == 200 else ""
-	except Exception:
-		return ""
+	match = re.search(r"/d/([a-zA-Z0-9_-]+)", doc_url)
+	if not match:
+		raise ResumeParseError("Could not find a document ID in the Google Docs link.")
+
+	url = f"https://docs.google.com/document/d/{match.group(1)}/export?format=txt"
+	response = requests.get(url, timeout=30)
+	if response.status_code != 200:
+		raise ResumeParseError(
+			f"Google Docs export failed (HTTP {response.status_code}). Make sure the doc is shared publicly."
+		)
+	return response.text
+
+
+# ---------------------------------------------------------------------------
+# Response parsing
+# ---------------------------------------------------------------------------
 
 
 def parse_and_validate_ai_response(ai_response: str | None) -> dict[str, Any] | None:
 	if not ai_response or not isinstance(ai_response, str):
 		return None
+
+	clean_resp = ai_response.strip()
+	clean_resp = re.sub(r"^```(?:json)?\s*", "", clean_resp, flags=re.IGNORECASE)
+	clean_resp = re.sub(r"\s*```$", "", clean_resp)
+
 	try:
-		clean_resp = ai_response.strip()
-		clean_resp = re.sub(r"^```json\s*", "", clean_resp, flags=re.IGNORECASE)
-		clean_resp = re.sub(r"^```\s*", "", clean_resp)
-		clean_resp = re.sub(r"\s*```$", "", clean_resp)
-
 		data = json.loads(clean_resp)
-		if not isinstance(data, dict):
+	except ValueError:
+		# Model wrapped the JSON in extra text; try the outermost {...} block
+		start, end = clean_resp.find("{"), clean_resp.rfind("}")
+		if start == -1 or end <= start:
+			return None
+		try:
+			data = json.loads(clean_resp[start : end + 1])
+		except ValueError:
 			return None
 
-		if "overall_score" not in data or "recommendation" not in data:
-			return None
-
-		return data
-	except Exception:
+	if not isinstance(data, dict) or "overall_score" not in data or "recommendation" not in data:
 		return None
+	return data
 
 
-def get_enabled_providers_for_company(company: str | None) -> list[Any]:
+def normalize_recommendation(data: dict[str, Any]) -> tuple[str, int]:
 	"""
-	Multi-tenant provider selection filtering by company if configured.
+	Maps the AI's recommendation (or score as fallback) onto one of RECOMMENDATION_OPTIONS.
+	Returns (recommendation_label, star_rating 1-5).
 	"""
-	if company:
-		comp_providers = frappe.get_all(
-			"Ai Model Config List", fields=["*"], filters={"enabled": 1, "company": company}
+	norm = re.sub(r"[^a-z0-9]", "", str(data.get("recommendation") or "").lower())
+	# "not recommended" / "reject" must be checked before "recommended"
+	if "highly" in norm or norm == "5":
+		rating = 5
+	elif "reject" in norm or "not" in norm or norm == "1":
+		rating = 1
+	elif "recommended" in norm or norm == "4":
+		rating = 4
+	elif "consider" in norm or norm == "3":
+		rating = 3
+	elif "potential" in norm or "weak" in norm or norm == "2":
+		rating = 2
+	else:
+		score = clamp_score(data.get("overall_score"))
+		if score >= 85:
+			rating = 5
+		elif score >= 70:
+			rating = 4
+		elif score >= 55:
+			rating = 3
+		elif score >= 40:
+			rating = 2
+		else:
+			rating = 1
+	return RECOMMENDATION_OPTIONS[rating], rating
+
+
+def clamp_score(value: Any) -> int:
+	return max(0, min(100, cint(flt(value))))
+
+
+def list_to_str(value: Any) -> str:
+	if isinstance(value, list):
+		return ", ".join(str(v) for v in value)
+	return str(value or "")
+
+
+INTERVIEW_QUESTION_SECTIONS = {
+	"technical": "Technical Questions",
+	"hr": "HR / Culture Questions",
+	"scenario": "Scenario / Behavioral Questions",
+}
+
+
+def format_interview_questions(questions: Any) -> str:
+	"""Renders the AI's interview_questions JSON as HTML (heading + numbered list per category)."""
+	if isinstance(questions, list):
+		questions = {"general": questions}
+	if not isinstance(questions, dict):
+		return ""
+
+	html = []
+	for key, items in questions.items():
+		if isinstance(items, str):
+			items = [items]
+		if not isinstance(items, list) or not items:
+			continue
+		title = INTERVIEW_QUESTION_SECTIONS.get(key, str(key).replace("_", " ").title() + " Questions")
+		# Explicit bold serial numbers (an <ol> can't style its numbers inside the Text Editor)
+		lines = "".join(
+			f"<p><strong>{idx}.</strong> {escape_html(str(q))}</p>"
+			for idx, q in enumerate((q for q in items if q), start=1)
 		)
-		if comp_providers:
-			return comp_providers
+		html.append(f"<h4>{escape_html(title)}</h4>{lines}")
+	return "".join(html)
 
-	return frappe.get_all("Ai Model Config List", fields=["*"], filters={"enabled": 1})
+
+# ---------------------------------------------------------------------------
+# Processing
+# ---------------------------------------------------------------------------
 
 
 def safe_set_applicant_values(applicant_name: str, update_dict: dict[str, Any]) -> None:
@@ -689,9 +817,47 @@ def safe_set_applicant_values(applicant_name: str, update_dict: dict[str, Any]) 
 	for k, v in update_dict.items():
 		if frappe.db.has_column("Job Applicant", k):
 			valid_dict[k] = v
+		else:
+			frappe.log_error(
+				title="Ai Resume Shortener: missing column",
+				message=f"Job Applicant has no column '{k}'. Run 'bench migrate' to sync custom fields.",
+			)
 
 	if valid_dict:
 		frappe.db.set_value("Job Applicant", applicant_name, valid_dict)
+
+
+def mark_failed(job_applicant_name: str, err_msg: str) -> dict[str, Any]:
+	safe_set_applicant_values(job_applicant_name, {"custom_is_success": -1, "custom_summary": err_msg})
+	create_ai_log(job_applicant=job_applicant_name, status="Failed", error_message=err_msg)
+	return {"status": "failed", "reason": err_msg}
+
+
+def process_single_applicant_by_name(job_applicant_name: str) -> dict[str, Any]:
+	"""Background job entry point. Never leaves the Queued log hanging, even on unexpected errors."""
+	try:
+		job_applicant = frappe.get_doc("Job Applicant", job_applicant_name)
+		result = process_single_applicant(job_applicant)
+	except Exception as e:
+		frappe.db.rollback()
+		frappe.log_error(
+			title="AI Resume Analysis Error",
+			message=frappe.get_traceback(),
+			reference_doctype="Job Applicant",
+			reference_name=job_applicant_name,
+		)
+		if frappe.db.exists("Job Applicant", job_applicant_name):
+			result = mark_failed(job_applicant_name, f"Analysis failed: unexpected error: {e!s}")
+		else:
+			result = {"status": "failed", "reason": f"Job Applicant {job_applicant_name} not found."}
+
+	frappe.publish_realtime(
+		"ai_resume_analysis_done",
+		{"job_applicant": job_applicant_name, **result},
+		user=frappe.session.user,
+		after_commit=True,
+	)
+	return result
 
 
 def process_single_applicant(job_applicant: Any) -> dict[str, Any]:
@@ -700,63 +866,29 @@ def process_single_applicant(job_applicant: Any) -> dict[str, Any]:
 	Handles SHA256 duplicate detection, prompt versioning, provider failover, token cost calculation,
 	and AI analysis history table recording.
 	"""
-	if not job_applicant.get("resume_attachment") and not job_applicant.get("resume_link"):
-		err_msg = "Analysis failed: Missing resume attachment or link."
-		safe_set_applicant_values(
-			job_applicant.name,
-			{"custom_is_success": -1, "custom_summary": err_msg},
+	try:
+		resume_text, file_hash = get_resume_text_and_hash(job_applicant)
+	except ResumeParseError as e:
+		return mark_failed(job_applicant.name, f"Analysis failed: {e!s}")
+
+	duplicate = frappe.db.get_value(
+		"Job Applicant",
+		{"custom_resume_hash": file_hash, "name": ["!=", job_applicant.name]},
+		"name",
+	)
+	if duplicate:
+		job_applicant.add_comment(
+			"Comment", f"Possible duplicate: same resume file as Job Applicant {duplicate}."
 		)
-		create_ai_log(job_applicant=job_applicant.name, status="Failed", error_message=err_msg)
-		return {"status": "failed", "reason": err_msg}
 
-	resume_text, file_hash = get_resume_text_and_hash(job_applicant)
-	if not resume_text:
-		err_msg = "Analysis failed: Could not parse text from resume file/link."
-		safe_set_applicant_values(
-			job_applicant.name,
-			{"custom_is_success": -1, "custom_summary": err_msg},
-		)
-		create_ai_log(job_applicant=job_applicant.name, status="Failed", error_message=err_msg)
-		return {"status": "failed", "reason": err_msg}
+	company = job_applicant.get("company") or frappe.db.get_value(
+		"Job Opening", job_applicant.get("job_title"), "company"
+	)
+	providers_to_try = order_providers(get_enabled_providers_for_company(company))
+	if not providers_to_try:
+		return mark_failed(job_applicant.name, "Analysis failed: No enabled AI model configurations available.")
 
-	# Check for Duplicate Resume Hash (Column Safe)
-	if file_hash and frappe.db.has_column("Job Applicant", "custom_resume_hash"):
-		try:
-			duplicate = frappe.db.get_value(
-				"Job Applicant",
-				{"custom_resume_hash": file_hash, "name": ["!=", job_applicant.name]},
-				"name",
-			)
-			if duplicate:
-				frappe.log_error(
-					message=f"Duplicate resume detected. Same hash as applicant {duplicate}",
-					reference_doctype="Job Applicant",
-					reference_name=job_applicant.name,
-					title="Duplicate CV Detected",
-				)
-		except Exception:
-			pass
-
-	ai_provider_lst = get_enabled_providers_for_company(job_applicant.get("company"))
-	if not ai_provider_lst:
-		err_msg = "Analysis failed: No enabled AI model configurations available."
-		frappe.db.set_value(
-			"Job Applicant",
-			job_applicant.name,
-			{"custom_is_success": -1, "custom_summary": err_msg},
-		)
-		create_ai_log(job_applicant=job_applicant.name, status="Failed", error_message=err_msg)
-		return {"status": "failed", "reason": err_msg}
-
-	default_provider_name = frappe.db.get_single_value("Ai Config", "default")
-	providers_to_try = []
-	for p in ai_provider_lst:
-		if p.name == default_provider_name:
-			providers_to_try.insert(0, p)
-		else:
-			providers_to_try.append(p)
-
-	success = False
+	last_error = ""
 	for idx, provider_config in enumerate(providers_to_try):
 		is_last_provider = idx == (len(providers_to_try) - 1)
 		ai_model_config = frappe.get_doc("Ai Model Config List", provider_config.name)
@@ -768,166 +900,100 @@ def process_single_applicant(job_applicant: Any) -> dict[str, Any]:
 		provider_name = ai_response.get("provider") or ai_model_config.service_provider
 		model_name = ai_response.get("model_name") or ai_model_config.model_name
 		prompt_version = ai_response.get("prompt_version", "v1.0")
+		log_kwargs = {
+			"job_applicant": job_applicant.name,
+			"service_provider": provider_name,
+			"model_name": model_name,
+			"execution_time": ai_response.get("execution_time", 0.0),
+			"prompt_tokens": ai_response.get("prompt_tokens", 0),
+			"completion_tokens": ai_response.get("completion_tokens", 0),
+			"total_tokens": ai_response.get("total_tokens", 0),
+			"raw_response": resp_text,
+		}
+
+		data = parse_and_validate_ai_response(resp_text) if status_code == 200 and resp_text else None
+		if not data:
+			if status_code == 200 and resp_text:
+				last_error = f"Invalid/corrupt JSON structure from {provider_name}"
+			else:
+				last_error = ai_response.get("error") or f"HTTP {status_code} error from {provider_name}"
+			create_ai_log(
+				status="Retried" if not is_last_provider else "Failed",
+				error_message=last_error,
+				**log_kwargs,
+			)
+			continue
 
 		cost = calculate_request_cost(
 			ai_response,
 			ai_model_config.get("input_cost_per_1m", 0.0),
 			ai_model_config.get("output_cost_per_1m", 0.0),
 		)
+		overall_score = clamp_score(data.get("overall_score"))
+		match_percentage = clamp_score(data.get("match_percentage", overall_score))
+		confidence_score = clamp_score(data.get("confidence_score", 90))
+		recommendation, numeric_rating = normalize_recommendation(data)
 
-		if status_code == 200 and resp_text:
-			data = parse_and_validate_ai_response(resp_text)
-			if data:
-				overall_score = data.get("overall_score", 0)
-				recommendation_str = data.get("recommendation", "Consider")
+		safe_set_applicant_values(
+			job_applicant.name,
+			{
+				"custom_overall_score": overall_score,
+				"custom_match_percentage": match_percentage,
+				"custom_confidence_score": confidence_score,
+				"custom_education_score": clamp_score(data.get("education_score")),
+				"custom_experience_score": clamp_score(data.get("experience_score")),
+				"custom_skills_score": clamp_score(data.get("skills_score")),
+				"custom_additional_requirements_score": clamp_score(data.get("additional_requirements_score")),
+				"custom_is_success": 1,
+				"custom_recommendation": recommendation,
+				"custom_summary": data.get("summary", ""),
+				"custom_strengths": list_to_str(data.get("strengths")),
+				"custom_missing_skills": list_to_str(data.get("missing_skills")),
+				"custom_extracted_skills": list_to_str(data.get("extracted_skills")),
+				"custom_interview_questions": format_interview_questions(data.get("interview_questions")),
+				"custom_resume_hash": file_hash,
+				"custom_ai_provider": f"{provider_name} ({model_name} - {prompt_version})",
+				# Rating fields are stored as a 0-1 fraction (4 stars = 0.8)
+				"applicant_rating": numeric_rating / 5,
+			},
+		)
 
-				# Flexibly determine 1-5 star rating from recommendation OR overall_score
-				norm_rec = re.sub(r"[^a-zA-Z0-9]", "", str(recommendation_str)).lower()
-				if "highly" in norm_rec or norm_rec == "5":
-					numeric_rating = 5
-				elif "recommended" in norm_rec or norm_rec == "4":
-					numeric_rating = 4
-				elif "consider" in norm_rec or norm_rec == "3":
-					numeric_rating = 3
-				elif "potential" in norm_rec or norm_rec == "2":
-					numeric_rating = 2
-				elif "reject" in norm_rec or "not" in norm_rec or norm_rec == "1":
-					numeric_rating = 1
-				else:
-					if overall_score >= 85:
-						numeric_rating = 5
-					elif overall_score >= 70:
-						numeric_rating = 4
-					elif overall_score >= 55:
-						numeric_rating = 3
-					elif overall_score >= 40:
-						numeric_rating = 2
-					else:
-						numeric_rating = 1
-
-				strengths_str = (
-					", ".join(data.get("strengths", []))
-					if isinstance(data.get("strengths"), list)
-					else str(data.get("strengths") or "")
-				)
-				missing_str = (
-					", ".join(data.get("missing_skills", []))
-					if isinstance(data.get("missing_skills"), list)
-					else str(data.get("missing_skills") or "")
-				)
-				extracted_skills_str = (
-					", ".join(data.get("extracted_skills", []))
-					if isinstance(data.get("extracted_skills"), list)
-					else str(data.get("extracted_skills") or "")
-				)
-
-				interview_questions_str = json.dumps(data.get("interview_questions", {}), indent=2)
-
-				# Update Main Job Applicant Doc safely
-				safe_set_applicant_values(
-					job_applicant.name,
-					{
-						"custom_overall_score": overall_score,
-						"custom_match_percentage": data.get("match_percentage", overall_score),
-						"custom_confidence_score": data.get("confidence_score", 90),
-						"custom_education_score": data.get("education_score", 0),
-						"custom_experience_score": data.get("experience_score", 0),
-						"custom_skills_score": data.get("skills_score", 0),
-						"custom_additional_requirements_score": data.get("additional_requirements_score", 0),
-						"custom_is_success": 1,
-						"custom_recommendation": recommendation_str,
-						"custom_summary": data.get("summary", ""),
-						"custom_strengths": strengths_str,
-						"custom_missing_skills": missing_str,
-						"custom_extracted_skills": extracted_skills_str,
-						"custom_interview_questions": interview_questions_str,
-						"custom_resume_hash": file_hash,
-						"custom_ai_provider": f"{provider_name} ({model_name} - {prompt_version})",
-						"applicant_rating": numeric_rating,
-					},
-				)
-
-				# Append to Job Applicant AI History Child Table safely
-				try:
-					job_applicant.reload()
-					job_applicant.applicant_rating = numeric_rating
-					if hasattr(job_applicant, "rating"):
-						job_applicant.rating = numeric_rating
-
-					if hasattr(job_applicant, "custom_ai_history"):
-						job_applicant.append(
-							"custom_ai_history",
-							{
-								"analysis_date": frappe.utils.now_datetime(),
-								"service_provider": provider_name,
-								"model_name": model_name,
-								"prompt_version": prompt_version,
-								"overall_score": overall_score,
-								"match_percentage": data.get("match_percentage", overall_score),
-								"confidence_score": data.get("confidence_score", 90),
-								"recommendation": recommendation_str,
-								"rating": numeric_rating,
-								"cost": cost,
-								"execution_time": ai_response.get("execution_time", 0.0),
-								"summary": data.get("summary", ""),
-								"raw_json": resp_text,
-							},
-						)
-					job_applicant.save(ignore_permissions=True)
-				except Exception as e:
-					frappe.log_error(f"Error appending to custom_ai_history: {e!s}")
-
-				# Centralized Audit Log
-				create_ai_log(
-					job_applicant=job_applicant.name,
-					service_provider=provider_name,
-					model_name=model_name,
-					status="Success",
-					execution_time=ai_response.get("execution_time", 0.0),
-					prompt_tokens=ai_response.get("prompt_tokens", 0),
-					completion_tokens=ai_response.get("completion_tokens", 0),
-					total_tokens=ai_response.get("total_tokens", 0),
-					raw_response=resp_text,
-				)
-
-				success = True
-				break
-			else:
-				last_error = f"Invalid/corrupt JSON structure from {provider_name}"
-				create_ai_log(
-					job_applicant=job_applicant.name,
-					service_provider=provider_name,
-					model_name=model_name,
-					status="Retried" if not is_last_provider else "Failed",
-					execution_time=ai_response.get("execution_time", 0.0),
-					prompt_tokens=ai_response.get("prompt_tokens", 0),
-					completion_tokens=ai_response.get("completion_tokens", 0),
-					total_tokens=ai_response.get("total_tokens", 0),
-					error_message=last_error,
-					raw_response=resp_text,
-				)
-		else:
-			last_error = ai_response.get("error") or f"HTTP {status_code} error from {provider_name}"
-			create_ai_log(
-				job_applicant=job_applicant.name,
-				service_provider=provider_name,
-				model_name=model_name,
-				status="Retried" if not is_last_provider else "Failed",
-				execution_time=ai_response.get("execution_time", 0.0),
-				error_message=last_error,
-				raw_response=resp_text,
+		# Insert the history row directly so Job Applicant validations/notifications don't block it
+		try:
+			job_applicant.reload()
+			row = job_applicant.append(
+				"custom_ai_history",
+				{
+					"analysis_date": now_datetime(),
+					"service_provider": provider_name,
+					"model_name": model_name,
+					"prompt_version": prompt_version,
+					"overall_score": overall_score,
+					"match_percentage": match_percentage,
+					"confidence_score": confidence_score,
+					"recommendation": recommendation,
+					"rating": numeric_rating,
+					"cost": cost,
+					"execution_time": ai_response.get("execution_time", 0.0),
+					"summary": data.get("summary", ""),
+					"raw_json": resp_text,
+				},
+			)
+			row.db_insert()
+		except Exception:
+			frappe.log_error(
+				title="Error appending to custom_ai_history",
+				message=frappe.get_traceback(),
+				reference_doctype="Job Applicant",
+				reference_name=job_applicant.name,
 			)
 
-	if not success:
-		final_error = f"Analysis failed: {last_error}"
-		frappe.db.set_value(
-			"Job Applicant",
-			job_applicant.name,
-			{"custom_is_success": -1, "custom_summary": final_error},
-		)
-		return {"status": "failed", "reason": final_error}
+		create_ai_log(status="Success", **log_kwargs)
+		return {"status": "success", "applicant": job_applicant.name}
 
-	return {"status": "success", "applicant": job_applicant.name}
+	final_error = f"Analysis failed: {last_error}"
+	safe_set_applicant_values(job_applicant.name, {"custom_is_success": -1, "custom_summary": final_error})
+	return {"status": "failed", "reason": final_error}
 
 
 def process_data(lst_job_applicants: list[Any]) -> None:

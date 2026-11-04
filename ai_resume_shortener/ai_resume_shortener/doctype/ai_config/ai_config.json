@@ -6,16 +6,26 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "enable_auto_analysis",
   "default",
   "prompt_template",
   "model_config_list"
  ],
  "fields": [
   {
+   "default": "0",
+   "description": "When enabled, the hourly scheduler analyzes every pending Job Applicant (uses API credits).",
+   "fieldname": "enable_auto_analysis",
+   "fieldtype": "Check",
+   "label": "Enable Hourly Auto Analysis"
+  },
+  {
    "fieldname": "default",
    "fieldtype": "Link",
-   "label": "Default",
-   "options": "Ai Model Config List"
+   "label": "Default (Deprecated)",
+   "options": "Ai Model Config List",
+   "hidden": 1,
+   "description": "Deprecated: tick 'Is Default' on a model row instead."
   },
   {
    "description": "Use placeholders {job_desc} and {resume_text}. Leave empty to use the standard default prompt.",
@@ -34,7 +44,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-07-04 11:24:50.800199",
+ "modified": "2026-11-04 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Ai Resume Shortener",
  "name": "Ai Config",
