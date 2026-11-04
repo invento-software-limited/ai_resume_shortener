@@ -41,7 +41,9 @@ class IntegrationTestAiConfig(IntegrationTestCase):
 
 	def test_parse_ai_response(self):
 		self.assertEqual(
-			parse_and_validate_ai_response('```json\n{"overall_score": 80, "recommendation": "Consider"}\n```'),
+			parse_and_validate_ai_response(
+				'```json\n{"overall_score": 80, "recommendation": "Consider"}\n```'
+			),
 			{"overall_score": 80, "recommendation": "Consider"},
 		)
 		self.assertEqual(

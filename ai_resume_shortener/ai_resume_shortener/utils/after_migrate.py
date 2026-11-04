@@ -8,7 +8,9 @@ def create_ai_provider_list():
 	try:
 		frappe.sync_customizations("ai_resume_shortener")
 	except Exception:
-		frappe.log_error(title="Ai Resume Shortener: custom field sync failed", message=frappe.get_traceback())
+		frappe.log_error(
+			title="Ai Resume Shortener: custom field sync failed", message=frappe.get_traceback()
+		)
 
 	ai_providers = ["Google Gemini", "OpenRouter"]
 

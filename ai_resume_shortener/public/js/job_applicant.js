@@ -35,7 +35,9 @@ frappe.ui.form.on("Job Applicant", {
 						if (r.message && r.message.status === "enqueued") {
 							frappe.show_alert({
 								indicator: "blue",
-								message: __("AI analysis started. This page will refresh when it finishes."),
+								message: __(
+									"AI analysis started. This page will refresh when it finishes."
+								),
 							});
 						} else {
 							frappe.msgprint({

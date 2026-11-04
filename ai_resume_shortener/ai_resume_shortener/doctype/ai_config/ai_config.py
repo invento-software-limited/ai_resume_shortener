@@ -886,7 +886,9 @@ def process_single_applicant(job_applicant: Any) -> dict[str, Any]:
 	)
 	providers_to_try = order_providers(get_enabled_providers_for_company(company))
 	if not providers_to_try:
-		return mark_failed(job_applicant.name, "Analysis failed: No enabled AI model configurations available.")
+		return mark_failed(
+			job_applicant.name, "Analysis failed: No enabled AI model configurations available."
+		)
 
 	last_error = ""
 	for idx, provider_config in enumerate(providers_to_try):
@@ -943,7 +945,9 @@ def process_single_applicant(job_applicant: Any) -> dict[str, Any]:
 				"custom_education_score": clamp_score(data.get("education_score")),
 				"custom_experience_score": clamp_score(data.get("experience_score")),
 				"custom_skills_score": clamp_score(data.get("skills_score")),
-				"custom_additional_requirements_score": clamp_score(data.get("additional_requirements_score")),
+				"custom_additional_requirements_score": clamp_score(
+					data.get("additional_requirements_score")
+				),
 				"custom_is_success": 1,
 				"custom_recommendation": recommendation,
 				"custom_summary": data.get("summary", ""),

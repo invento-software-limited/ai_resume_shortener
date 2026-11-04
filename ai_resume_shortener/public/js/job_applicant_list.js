@@ -35,7 +35,9 @@ frappe.listview_settings["Job Applicant"] = {
 									title: __("Error"),
 									indicator: "red",
 									message: esc(
-										r.message ? r.message.message : __("Failed to enqueue jobs.")
+										r.message
+											? r.message.message
+											: __("Failed to enqueue jobs.")
 									),
 								});
 							}
