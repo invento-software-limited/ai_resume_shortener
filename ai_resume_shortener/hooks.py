@@ -12,15 +12,14 @@ app_logo_url = "/assets/ai_resume_shortener/logo.png"
 required_apps = ["hrms"]
 
 # Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "ai_resume_shortener",
-# 		"logo": "/assets/ai_resume_shortener/logo.png",
-# 		"title": "Ai Resume Shortener",
-# 		"route": "/ai_resume_shortener",
-# 		"has_permission": "ai_resume_shortener.api.permission.has_app_permission"
-# 	}
-# ]
+add_to_apps_screen = [
+	{
+		"name": "ai_resume_shortener",
+		"logo": "/assets/ai_resume_shortener/images/ai_resume_shortener_logo.svg",
+		"title": "AI Resume Shortener",
+		"route": "/app/ai-resume-shortener",
+	}
+]
 
 # Includes in <head>
 # ------------------
